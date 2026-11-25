@@ -1,5 +1,7 @@
 # salon-voice-agent — appointment tools for a Vapi phone agent (n8n + reference webhook)
 
+[![tests](https://github.com/gh0stsyntax/reception-desk/actions/workflows/tests.yml/badge.svg)](https://github.com/gh0stsyntax/reception-desk/actions/workflows/tests.yml)
+
 A phone assistant that books hair-salon appointments needs two server-side tools. This repository contains
 the logic behind them, written once, tested, and delivered in two forms:
 
