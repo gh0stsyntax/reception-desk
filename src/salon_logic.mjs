@@ -233,15 +233,19 @@ export function bookAppointment(args, ctx) {
 
 // ── Vapi envelope ───────────────────────────────────────────────────────────────────────────
 
-/** First tool call of a Vapi "tool-calls" server message, normalised: {id, name, args}. null if there is none. */
+/** Tool calls of a Vapi "tool-calls" server message, normalised to [{id, name, args}] (empty list if there are none).
+ *  Documented shape (docs.vapi.ai/server-url/events): message.toolCallList[] = {id, type: "function", function: {name, arguments}}.
+ *  message.toolWithToolCallList[] (tool definition + nested toolCall) is read as well; a flat {id, name, arguments} and a
+ *  message.toolCalls list are tolerated, `arguments` may be an object or a JSON string. */
 export function extractToolCalls(body) {
   const msg = (body && body.message) || {};
-  const list = msg.toolCallList || msg.toolCalls || msg.toolWithToolCallList || [];
+  const list = msg.toolCallList || msg.toolWithToolCallList || msg.toolCalls || [];
   return list.map((c) => {
-    const fn = c.function || c.toolCall?.function || {};
-    let args = c.arguments ?? fn.arguments ?? c.toolCall?.function?.arguments ?? {};
+    const call = c.toolCall || c;                                     // toolWithToolCallList nests the call
+    const fn = call.function || {};
+    let args = fn.arguments ?? call.arguments ?? {};
     if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = { __invalid_json: true }; } }
-    return { id: c.id || c.toolCall?.id, name: c.name || fn.name || c.tool?.name, args: args || {} };
+    return { id: call.id, name: fn.name || call.name, args: args && typeof args === "object" ? args : {} };
   });
 }
 
@@ -257,8 +261,28 @@ export function runTool(call, ctx) {
   }
 }
 
-/** Vapi expects {results: [{toolCallId, result}]} where result is a single-line string. */
+const MAX_REMEMBERED = 200;
+/** Vapi can deliver the same tool call twice (retries are configurable). A retried booking must not turn into "slot taken":
+ *  the answer is remembered per toolCallId. `memory` is {order: [], answers: {}} and is kept by the caller (RAM, n8n static data).
+ *  Returns {outcome, replay}; on replay the caller must NOT repeat side effects (calendar write). */
+export function runToolOnce(call, ctx, memory) {
+  if (call.id && Object.prototype.hasOwnProperty.call(memory.answers, call.id)) return { outcome: memory.answers[call.id], replay: true };
+  const outcome = runTool(call, ctx);
+  if (call.id) {
+    memory.answers[call.id] = outcome;
+    memory.order.push(call.id);
+    while (memory.order.length > MAX_REMEMBERED) delete memory.answers[memory.order.shift()];
+  }
+  return { outcome, replay: false };
+}
+
+/** Failures of the tool itself go into Vapi's `error` field; real answers (also "no, that slot is taken") go into `result`.
+ *  Both are single-line strings, as the Vapi docs require. */
+const TECHNICAL_ERRORS = new Set(["unknown_tool", "invalid_arguments", "internal_error"]);
 export function vapiResponse(call, outcome) {
+  if (TECHNICAL_ERRORS.has(outcome.error)) {
+    return { results: [{ toolCallId: call.id, error: String(outcome.message).replace(/\s+/g, " ").trim() }] };
+  }
   return { results: [{ toolCallId: call.id, result: JSON.stringify(outcome) }] };
 }
 

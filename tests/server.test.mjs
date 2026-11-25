@@ -70,3 +70,30 @@ test("several calls in one request are applied in order and keep their ids", asy
     assert.equal(JSON.parse(results[1].result).booked, false);
   });
 });
+
+
+test("Bearer token (Vapi default) and legacy X-Vapi-Secret are both accepted, wrong ones are not", async () => {
+  await withServer(async (base) => {
+    const body = { message: { toolCallList: [{ id: "a1", type: "function", function: { name: "check_availability", arguments: { time: "10:00", requested_date_text: "Freitag" } } }] } };
+    assert.equal((await post(base, body, { authorization: `Bearer ${SECRET}` })).status, 200);
+    assert.equal((await post(base, body, { authorization: `bearer ${SECRET}` })).status, 200);       // scheme is case-insensitive
+    assert.equal((await post(base, body, { "x-vapi-secret": SECRET })).status, 200);
+    assert.equal((await post(base, body, { authorization: SECRET })).status, 401);                    // no "Bearer" prefix
+    assert.equal((await post(base, body, { authorization: "Bearer wrong" })).status, 401);
+    assert.equal((await post(base, body, { authorization: "Basic " + SECRET })).status, 401);
+  });
+});
+
+test("retried delivery: same toolCallId books once and answers the same; technical failure uses error", async () => {
+  await withServer(async (base, cal) => {
+    const book = { message: { toolCallList: [{ id: "toolu_X", type: "function", function: { name: "book_appointment",
+      arguments: { time: "10:00", requested_date_text: "Freitag", customer_name: "Eva", confirmed: true } } }] } };
+    const first = await (await post(base, book)).json();
+    const second = await (await post(base, book)).json();                                              // Vapi retry
+    assert.deepEqual(second, first);
+    assert.equal(JSON.parse(first.results[0].result).booked, true);
+    assert.equal(cal.length, 1);
+    const unknown = await (await post(base, { message: { toolCallList: [{ id: "u", type: "function", function: { name: "nope", arguments: {} } }] } })).json();
+    assert.deepEqual(Object.keys(unknown.results[0]).sort(), ["error", "toolCallId"]);
+  });
+});

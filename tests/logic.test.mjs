@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   addDays, weekdayOf, parseGermanDate, parseGermanTime, resolveRequest, slotProblem, findAlternatives,
-  checkAvailability, bookAppointment, extractToolCalls, runTool, vapiResponse, eventsToBusy, serviceMinutes, nowIn,
+  checkAvailability, bookAppointment, extractToolCalls, runTool, runToolOnce, vapiResponse, eventsToBusy, serviceMinutes, nowIn,
 } from "../src/salon_logic.mjs";
 
 const config = JSON.parse(readFileSync(new URL("../config/salon.json", import.meta.url), "utf8"));
@@ -161,4 +161,40 @@ test("nowIn returns the salon's local wall clock", () => {
   assert.deepEqual(nowIn("Europe/Berlin", noon), { date: "2026-07-01", time: "12:00" });
   const late = new Date("2026-12-31T23:30:00Z");                      // winter, crosses midnight: UTC+1
   assert.deepEqual(nowIn("Europe/Berlin", late), { date: "2027-01-01", time: "00:30" });
+});
+
+
+test("documented Vapi shapes (docs.vapi.ai/server-url/events): toolCallList with function.name/arguments, and toolWithToolCallList", () => {
+  const documented = { message: { type: "tool-calls", timestamp: 1, toolCallList: [
+    { id: "toolu_01A", type: "function", function: { name: "check_availability", arguments: { time: "10:00", requested_date_text: "morgen" } } }] } };
+  assert.deepEqual(extractToolCalls(documented), [{ id: "toolu_01A", name: "check_availability", args: { time: "10:00", requested_date_text: "morgen" } }]);
+  const nested = { message: { toolWithToolCallList: [{ type: "function", function: { name: "book_appointment", description: "...", parameters: {} },
+    server: { url: "https://x" }, toolCall: { id: "toolu_02B", type: "function", function: { name: "book_appointment", arguments: { time: "10:00" } } } }] } };
+  assert.deepEqual(extractToolCalls(nested), [{ id: "toolu_02B", name: "book_appointment", args: { time: "10:00" } }]);
+  assert.deepEqual(extractToolCalls({ message: { type: "status-update" } }), []);
+});
+
+test("responses: result is a single-line string, technical failures use error, exactly one of the two", () => {
+  const call = { id: "c1", name: "check_availability", args: { time: "10:00", requested_date_text: "Freitag" } };
+  const ok = vapiResponse(call, runTool(call, ctx())).results[0];
+  assert.deepEqual(Object.keys(ok).sort(), ["result", "toolCallId"]);
+  assert.equal(typeof ok.result, "string");
+  assert.ok(!/[\r\n]/.test(ok.result));
+  const failed = vapiResponse({ id: "c2" }, { ok: false, error: "internal_error", message: "Interner\nFehler.\n  Nichts gebucht." }).results[0];
+  assert.deepEqual(failed, { toolCallId: "c2", error: "Interner Fehler. Nichts gebucht." });
+  for (const code of ["unknown_tool", "invalid_arguments"]) assert.ok("error" in vapiResponse({ id: "x" }, { error: code, message: "m" }).results[0]);
+  for (const code of ["not_confirmed", "busy", "closed", "unclear_date"]) assert.ok("result" in vapiResponse({ id: "x" }, { ok: false, error: code, message: "m" }).results[0]);   // answers, not tool failures
+});
+
+test("runToolOnce: a repeated toolCallId returns the first answer and is flagged as replay; memory stays bounded", () => {
+  const mem = { order: [], answers: {} };
+  const book = { id: "same", name: "book_appointment", args: { time: "10:00", requested_date_text: "Freitag", customer_name: "A", confirmed: true } };
+  const first = runToolOnce(book, ctx(), mem);
+  assert.equal(first.replay, false); assert.equal(first.outcome.booked, true);
+  const again = runToolOnce(book, ctx([{ start: "2026-11-27T10:00", end: "2026-11-27T10:30" }]), mem);   // slot is busy now (our own booking)
+  assert.equal(again.replay, true); assert.deepEqual(again.outcome, first.outcome);
+  for (let i = 0; i < 500; i++) runToolOnce({ id: `id${i}`, name: "check_availability", args: { time: "10:00", requested_date_text: "Freitag" } }, ctx(), mem);
+  assert.ok(mem.order.length <= 200 && Object.keys(mem.answers).length <= 200);
+  const noId = { name: "check_availability", args: { time: "10:00", requested_date_text: "Freitag" } };      // without an id nothing is remembered
+  assert.equal(runToolOnce(noId, ctx(), mem).replay, false); assert.equal(runToolOnce(noId, ctx(), mem).replay, false);
 });

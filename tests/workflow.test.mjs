@@ -43,17 +43,17 @@ test("no secrets or real identifiers are committed", () => {
 });
 
 // Run the embedded Code nodes the way n8n would, with a fixed clock.
-function runCodeNode(name, { input, upstream = {} }) {
+function runCodeNode(name, { input, upstream = {}, staticData = {} }) {
   const FakeDate = class extends Date { constructor(...a) { super(...(a.length ? a : [FIXED_UTC])); } static now() { return FIXED_UTC; } };
   const items = (arr) => ({ first: () => ({ json: arr[0] }), all: () => arr.map((json) => ({ json })) });
-  const sandbox = { Date: FakeDate, $input: items(input), $: (n) => items(upstream[n]), JSON, Intl, Error, Math, Object, Array, String, Number, Set };
+  const sandbox = { Date: FakeDate, $input: items(input), $: (n) => items(upstream[n]), $getWorkflowStaticData: () => staticData, JSON, Intl, Error, Math, Object, Array, String, Number, Set };
   const script = new vm.Script(`(function(){ ${node(name).parameters.jsCode} })()`);
   return script.runInNewContext(sandbox);
 }
 
-function viaWorkflow(body, events = []) {
+function viaWorkflow(body, events = [], staticData = {}) {
   const [prep] = runCodeNode("Prepare", { input: [{ body }] });
-  const [decided] = runCodeNode("Decide", { input: events.length ? events : [{}], upstream: { Prepare: [prep.json] } });
+  const [decided] = runCodeNode("Decide", { input: events.length ? events : [{}], upstream: { Prepare: [prep.json] }, staticData });
   // objects created inside vm have another Object.prototype; compare plain data, not realms
   return JSON.parse(JSON.stringify({ prep: prep.json, decided: decided.json }));
 }
@@ -116,4 +116,26 @@ test("parity: the n8n Code nodes and the reference server give identical answers
       }
     }
   } finally { await new Promise((r) => server.close(r)); }
+});
+
+
+test("retried delivery of the same toolCallId: same answer, and the calendar is written only once", () => {
+  const staticData = {};                                                  // n8n keeps this between executions of the active workflow
+  const body = call("retry-1", "book_appointment", { time: "14:00", requested_date_text: "Freitag", customer_name: "Eva", confirmed: true });
+  const first = viaWorkflow(body, [], staticData);
+  assert.equal(first.decided.create, true);
+  const second = viaWorkflow(body, [{ id: "e", start: { dateTime: "2026-11-27T14:00:00+01:00" }, end: { dateTime: "2026-11-27T14:30:00+01:00" } }], staticData);
+  assert.equal(second.decided.create, false);                             // no second calendar entry
+  assert.deepEqual(second.decided.response, first.decided.response);      // the model still hears "booked", not "slot taken"
+  assert.equal(JSON.parse(second.decided.response.results[0].result).booked, true);
+  const other = viaWorkflow(call("retry-2", "book_appointment", { time: "14:00", requested_date_text: "Freitag", customer_name: "Zoe", confirmed: true }),
+    [{ id: "e", start: { dateTime: "2026-11-27T14:00:00+01:00" }, end: { dateTime: "2026-11-27T14:30:00+01:00" } }], staticData);
+  assert.equal(JSON.parse(other.decided.response.results[0].result).booked, false);   // a DIFFERENT call is not a replay
+});
+
+test("technical failures use Vapi's error field, business answers use result", () => {
+  const unknown = viaWorkflow(call("t1", "delete_everything", {})).decided.response.results[0];
+  assert.deepEqual(Object.keys(unknown).sort(), ["error", "toolCallId"]);
+  const busy = viaWorkflow(call("t2", "check_availability", { time: "10:00", requested_date_text: "Sonntag" })).decided.response.results[0];
+  assert.deepEqual(Object.keys(busy).sort(), ["result", "toolCallId"]);
 });

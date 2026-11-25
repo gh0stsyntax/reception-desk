@@ -35,8 +35,10 @@ export const DECIDE_TAIL = `
 const CONFIG = ${JSON.stringify(config)};
 const prep = $('Prepare').first().json;
 const events = $input.all().map((i) => i.json).filter((e) => e && (e.start || e.id));   // empty calendar -> one empty item
-const outcome = runTool(prep.call, { config: CONFIG, busy: eventsToBusy(events), now: prep.now });
-return [{ json: { response: vapiResponse(prep.call, outcome), create: outcome.booked === true, event: outcome.event || null } }];
+const memory = $getWorkflowStaticData("global");              // kept between executions of the ACTIVE workflow
+memory.vapi = memory.vapi || { order: [], answers: {} };
+const { outcome, replay } = runToolOnce(prep.call, { config: CONFIG, busy: eventsToBusy(events), now: prep.now }, memory.vapi);
+return [{ json: { response: vapiResponse(prep.call, outcome), create: outcome.booked === true && !replay, event: outcome.event || null } }];
 `;
 
 const calendarRef = { __rl: true, value: "primary", mode: "id" };
