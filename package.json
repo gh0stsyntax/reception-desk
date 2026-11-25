@@ -1,0 +1,14 @@
+{
+  "name": "salon-voice-agent",
+  "version": "0.1.0",
+  "description": "Appointment logic, reference webhook and importable n8n workflow for a Vapi phone agent (fictional test salon).",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node n8n/build_workflow.mjs",
+    "test": "node --test",
+    "start": "node src/server.mjs"
+  }
+}

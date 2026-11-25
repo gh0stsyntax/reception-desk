@@ -1,0 +1,46 @@
+{
+  "_comment": "Vapi tool definitions (POST https://api.vapi.ai/tool). serverUrl and the credential are deployment-specific; no secrets here.",
+  "tools": [
+    {
+      "type": "function",
+      "async": false,
+      "function": {
+        "name": "check_availability",
+        "description": "Prüft im fiktiven Testkalender des Salon Haarwerk, ob der angefragte Termin verfügbar ist. Bei relativen Datumsangaben die ursprüngliche Formulierung unverändert als requested_date_text übergeben und kein ISO-Datum berechnen. Verfügbarkeit niemals ohne eindeutige erfolgreiche Werkzeugantwort behaupten.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date": { "type": "string", "description": "ISO date YYYY-MM-DD, only if the caller named an absolute date" },
+            "time": { "type": "string", "description": "Time of day, e.g. 14:30" },
+            "requested_date_text": { "type": "string", "description": "The caller's words for the day, unchanged (e.g. 'morgen', 'nächsten Freitag')" },
+            "service": { "type": "string", "description": "Optional service, determines the duration" }
+          },
+          "required": ["time"]
+        }
+      },
+      "server": { "url": "https://YOUR-HOST/webhook/friseur-termine", "timeoutSeconds": 20 }
+    },
+    {
+      "type": "function",
+      "async": false,
+      "function": {
+        "name": "book_appointment",
+        "description": "Bucht einen ausdrücklich bestätigten Termin im fiktiven Testkalender des Salon Haarwerk. Das Datum muss aus der letzten erfolgreichen Verfügbarkeitsprüfung stammen und darf nicht unabhängig berechnet werden. Nur nach vollständiger Zusammenfassung und ausdrücklicher Kundenbestätigung mit confirmed=true aufrufen. Buchung nur bei einer eindeutigen erfolgreichen Werkzeugantwort als erfolgreich bestätigen.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date": { "type": "string" },
+            "time": { "type": "string" },
+            "customer_name": { "type": "string" },
+            "confirmed": { "type": "boolean", "description": "true only after the caller explicitly confirmed the summary" },
+            "phone": { "type": "string" },
+            "service": { "type": "string" },
+            "requested_date_text": { "type": "string" }
+          },
+          "required": ["date", "time", "customer_name", "confirmed"]
+        }
+      },
+      "server": { "url": "https://YOUR-HOST/webhook/friseur-termine", "timeoutSeconds": 20 }
+    }
+  ]
+}
